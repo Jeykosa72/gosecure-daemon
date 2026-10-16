@@ -1,0 +1,17 @@
+# Binaries and build output
+/bin/
+/binary/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.env
