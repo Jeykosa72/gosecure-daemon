@@ -2,71 +2,81 @@ package worker
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"gosecure-daemon/internal/process"
 )
 
-// Job merepresentasikan payload event berkas yang perlu dianalisis.
 type Job struct {
 	FilePath  string
 	EventType string
 }
 
-// WorkerPool mengelola konkurensi worker menggunakan Go channels dan WaitGroup.
 type WorkerPool struct {
 	workerCount int
 	jobQueue    chan Job
 	runner      *process.SecureRunner
 	cmd         string
 	wg          sync.WaitGroup
+	logger      *slog.Logger
 }
 
-func NewWorkerPool(workerCount int, queueSize int, runner *process.SecureRunner, cmd string) *WorkerPool {
+func NewWorkerPool(workerCount int, queueSize int, runner *process.SecureRunner, cmd string, logger *slog.Logger) *WorkerPool {
 	return &WorkerPool{
 		workerCount: workerCount,
-		jobQueue:    make(chan Job, queueSize), // Buffered channel untuk mencegah blocking pada producer
+		jobQueue:    make(chan Job, queueSize),
 		runner:      runner,
 		cmd:         cmd,
+		logger:      logger,
 	}
 }
 
-// Start menginisialisasi worker goroutines sesuai kapasitas yang ditentukan.
 func (p *WorkerPool) Start(ctx context.Context) {
 	for i := 1; i <= p.workerCount; i++ {
 		p.wg.Add(1)
 		go p.worker(ctx, i)
 	}
-	log.Printf("[WorkerPool] Berhasil menjalankan %d worker goroutines", p.workerCount)
+	p.logger.Info("WorkerPool berhasil dimulai", slog.Int("worker_count", p.workerCount))
 }
 
 func (p *WorkerPool) worker(ctx context.Context, id int) {
 	defer p.wg.Done()
-	log.Printf("[Worker-%d] Siap menerima tugas...", id)
+	p.logger.Debug("Worker siap menerima tugas", slog.Int("worker_id", id))
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[Worker-%d] Menerima sinyal pembatalan, mematikan worker...", id)
+			p.logger.Debug("Worker menghentikan operasi", slog.Int("worker_id", id))
 			return
 		case job, ok := <-p.jobQueue:
 			if !ok {
-				log.Printf("[Worker-%d] Antrean pekerjaan telah ditutup", id)
 				return
 			}
-			log.Printf("[Worker-%d] Memproses file [%s] | Event: %s", id, job.FilePath, job.EventType)
+			p.logger.Info("Memproses file event",
+				slog.Int("worker_id", id),
+				slog.String("file_path", job.FilePath),
+				slog.String("event_type", job.EventType),
+			)
+
 			result, err := p.runner.AnalyzeFile(ctx, p.cmd, job.FilePath)
 			if err != nil {
-				log.Printf("[Worker-%d] ERROR pada %s: %v", id, job.FilePath, err)
+				p.logger.Error("Analisis file gagal",
+					slog.Int("worker_id", id),
+					slog.String("file_path", job.FilePath),
+					slog.String("error", err.Error()),
+				)
 			} else {
-				log.Printf("[Worker-%d] HASIL ANALISIS [%s]: %s", id, job.FilePath, result)
+				p.logger.Info("Analisis file berhasil",
+					slog.Int("worker_id", id),
+					slog.String("file_path", job.FilePath),
+					slog.String("output", result),
+				)
 			}
 		}
 	}
 }
 
-// Submit memasukkan pekerjaan ke antrean channel secara thread-safe.
 func (p *WorkerPool) Submit(ctx context.Context, job Job) bool {
 	select {
 	case <-ctx.Done():
@@ -74,14 +84,16 @@ func (p *WorkerPool) Submit(ctx context.Context, job Job) bool {
 	case p.jobQueue <- job:
 		return true
 	default:
-		log.Printf("[WorkerPool] WARNING: Antrean penuh (%d items), mengabaikan event: %s", len(p.jobQueue), job.FilePath)
+		p.logger.Warn("Antrean worker penuh, mengabaikan event",
+			slog.Int("queue_len", len(p.jobQueue)),
+			slog.String("file_path", job.FilePath),
+		)
 		return false
 	}
 }
 
-// Stop menghentikan alur worker secara bersih (Graceful Shutdown).
 func (p *WorkerPool) Stop() {
-	close(p.jobQueue) // Penutupan channel menandakan tidak ada job baru yang masuk
-	p.wg.Wait()       // Menunggu hingga seluruh worker menyelesaikan job yang tersisa
-	log.Println("[WorkerPool] Seluruh worker telah berhenti dengan bersih.")
+	close(p.jobQueue)
+	p.wg.Wait()
+	p.logger.Info("Seluruh worker telah selesai dieksekusi")
 }

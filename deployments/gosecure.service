@@ -1,0 +1,31 @@
+[Unit]
+Description=GoSecure Secure File Monitor & Process Control Daemon
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Path biner terkompilasi
+ExecStart=/usr/local/bin/gosecure-daemon
+
+# Otomatis restart jika daemon mati tiba-tiba
+Restart=always
+RestartSec=5s
+
+# Manajemen Lingkungan
+Environment=WATCH_DIR=/tmp/gosecure-target
+Environment=LOG_LEVEL=INFO
+
+# Batas Sumber Daya Sistem (Hardening)
+LimitNOFILE=65536
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_ADMIN
+
+# Pengarahan Output Log ke Systemd Journal (journalctl)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gosecure-daemon
+
+[Install]
+WantedBy=multi-user.target

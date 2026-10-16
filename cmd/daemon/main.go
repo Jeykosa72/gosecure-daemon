@@ -2,66 +2,73 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"gosecure-daemon/internal/config"
+	"gosecure-daemon/internal/logger"
 	"gosecure-daemon/internal/monitor"
 	"gosecure-daemon/internal/process"
 	"gosecure-daemon/internal/worker"
 )
 
 func main() {
-	log.Println("=====================================================")
-	log.Println(" Starting GoSecure-Daemon (Secure System Monitor) ")
-	log.Println("=====================================================")
+	// Inisialisasi Logger Terstruktur (slog)
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "INFO"
+	}
+	log := logger.SetupLogger(logLevel)
+	log.Info("Memulai GoSecure-Daemon", slog.String("version", "1.0.0"))
 
-	// 1. Memuat Konfigurasi Utama
+	// Memuat Konfigurasi
 	cfg := config.LoadDefaultConfig()
+	if envDir := os.Getenv("WATCH_DIR"); envDir != "" {
+		cfg.WatchDir = envDir
+	}
 
-	// 2. Inisialisasi Context dengan OS Signal Handling (Graceful Shutdown)
+	// Setup Context dengan Signal Handling untuk Graceful Shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 3. Menginisialisasi Komponen Modul
+	// Inisialisasi Komponen Modul dengan Dependency Injection Logger
 	runner := process.NewSecureRunner(cfg.ExecTimeout)
-	pool := worker.NewWorkerPool(cfg.WorkerCount, cfg.QueueSize, runner, cfg.SecurityCmd)
-
-	watcher, err := monitor.NewFileWatcher(cfg.WatchDir, pool)
+	pool := worker.NewWorkerPool(cfg.WorkerCount, cfg.QueueSize, runner, cfg.SecurityCmd, log)
+	watcher, err := monitor.NewFileWatcher(cfg.WatchDir, pool, log)
 	if err != nil {
-		log.Fatalf("[FATAL] Gagal menginisialisasi FileWatcher: %v", err)
+		log.Error("Gagal menginisialisasi FileWatcher", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
-	// 4. Memulai Worker Pool & Watcher secara Asinkron
+	// Jalankan Worker Pool & Watcher secara Asinkron
 	pool.Start(ctx)
 	if err := watcher.StartWatch(ctx); err != nil {
-		log.Fatalf("[FATAL] Gagal menjalankan pengawasan direktori: %v", err)
+		log.Error("Gagal menjalankan watcher", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
+	log.Info("Daemon berjalan penuh", slog.String("watch_dir", cfg.WatchDir))
 
-	log.Println("[Main] Daemon berjalan stabil. Tekan Ctrl+C atau kirim SIGTERM untuk menghentikan.")
-
-	// 5. Blocking sampai sinyal OS diterima
+	// Blok eksekusi hingga menerima sinyal penghentian OS
 	<-ctx.Done()
+	log.Info("Sinyal OS diterima, memulai Graceful Shutdown...")
 
-	log.Println("\n[Main] Sinyal penghentian diterima! Memulai alur Graceful Shutdown...")
-
-	// 6. Alur Terkontrol Shutdown dengan Hard Limit Timeout 5 Detik
+	// Alur Shutdown Terkontrol dengan Batas Waktu 5 Detik
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	done := make(chan struct{})
 	go func() {
-		pool.Stop() // Menunggu worker menyelesaikan job aktif hingga selesai
+		pool.Stop()
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		log.Println("[Main] Graceful shutdown selesai dengan sempurna. Daemon keluar bersih.")
+		log.Info("Graceful shutdown selesai. Daemon berhenti bersih.")
 	case <-shutdownCtx.Done():
-		log.Println("[Main] WARNING: Shutdown melebihi batas 5s, menghentikan aplikasi secara paksa.")
+		log.Warn("Shutdown melebihi batas 5s, menghentikan daemon secara paksa.")
 	}
 }

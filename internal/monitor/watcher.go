@@ -3,7 +3,7 @@ package monitor
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/fsnotify/fsnotify"
@@ -11,15 +11,14 @@ import (
 	"gosecure-daemon/internal/worker"
 )
 
-// FileWatcher memantau sistem berkas secara real-time menggunakan fsnotify/inotify.
 type FileWatcher struct {
 	watchDir string
 	watcher  *fsnotify.Watcher
 	pool     *worker.WorkerPool
+	logger   *slog.Logger
 }
 
-func NewFileWatcher(watchDir string, pool *worker.WorkerPool) (*FileWatcher, error) {
-	// Menerapkan Least Privilege: Pastikan direktori ada dengan izin ketat 0750
+func NewFileWatcher(watchDir string, pool *worker.WorkerPool, logger *slog.Logger) (*FileWatcher, error) {
 	if _, err := os.Stat(watchDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(watchDir, 0750); err != nil {
 			return nil, fmt.Errorf("gagal membuat direktori target: %w", err)
@@ -35,28 +34,29 @@ func NewFileWatcher(watchDir string, pool *worker.WorkerPool) (*FileWatcher, err
 		watchDir: watchDir,
 		watcher:  watcher,
 		pool:     pool,
+		logger:   logger,
 	}, nil
 }
 
-// StartWatch menjalankan event loop pengawasan berkas dalam goroutine terpisah.
 func (w *FileWatcher) StartWatch(ctx context.Context) error {
 	if err := w.watcher.Add(w.watchDir); err != nil {
-		return fmt.Errorf("gagal mendaftarkan direktori ke watcher: %w", err)
+		return fmt.Errorf("gagal mendaftarkan direktori: %w", err)
 	}
-	log.Printf("[Monitor] Memulai pengawasan direktori: %s", w.watchDir)
+
+	w.logger.Info("Memulai pengawasan direktori", slog.String("watch_dir", w.watchDir))
 
 	go func() {
 		defer w.watcher.Close()
 		for {
 			select {
 			case <-ctx.Done():
-				log.Println("[Monitor] Sinyal shutdown diterima, menghentikan watcher...")
+				w.logger.Info("Menghentikan pengawasan direktori...")
 				return
 			case event, ok := <-w.watcher.Events:
 				if !ok {
 					return
 				}
-				// Menyaring hanya event pembuatan (Create) dan modifikasi (Write)
+
 				if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
 					job := worker.Job{
 						FilePath:  event.Name,
@@ -68,7 +68,7 @@ func (w *FileWatcher) StartWatch(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				log.Printf("[Monitor] ERROR watcher event: %v", err)
+				w.logger.Error("Error pada event watcher", slog.String("error", err.Error()))
 			}
 		}
 	}()
