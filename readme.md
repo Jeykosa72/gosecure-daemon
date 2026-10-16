@@ -70,7 +70,7 @@ Kompilasi proyek menjadi binary:
 
 ```bash
 mkdir -p bin
-go build -o bin/gosecure-daemon .
+go build -o bin/gosecure-daemon ./cmd/daemon
 ```
 
 Jika kompilasi berhasil, binary akan tersedia di:
@@ -122,5 +122,3 @@ Pastikan seluruh pengujian berjalan dengan sukses sebelum menggunakan daemon pad
 - Penggunaan buffered channel dan worker pool membantu membatasi konkurensi, tetapi penanganan antrean penuh tetap perlu dirancang secara eksplisit.
 
 ## Lisensi
-
-Tambahkan informasi lisensi proyek sesuai lisensi yang dipilih.
